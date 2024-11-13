@@ -78,6 +78,7 @@ exports.externalTransfer = async (walletId, amount, narrative) => {
   }
 };
 
+
 // Transaction Status
 exports.getTransactionStatus = async (trackingId) => {
   const intasend = initIntaSend();
