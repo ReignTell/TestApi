@@ -1,92 +1,150 @@
-// Load IntaSend Library
-const IntaSend = require('intasend-node');
+// Required for HTTP requests in PlayFab Cloud Script
+//const https = require("https");
 
-// Initialize IntaSend with keys stored in PlayFab Title Data
-function initIntaSend() {
-  const publishableKey = process.env.PUBLISHABLE_KEY;
-  const secretKey = process.env.SECRET_KEY;
-  const isTestEnv = process.env.TEST_ENV === 'true'; // set this in your PlayFab settings as 'true' or 'false'
+/**
+ * Helper function to make API calls to IntaSend.
+ * @param {string} path - The API endpoint path (e.g., "/wallets/").
+ * @param {string} method - HTTP method ("GET" or "POST").
+ * @param {object} body - The request payload (JSON format) for POST requests.
+ * @param {function} callback - Callback function to handle the response or error.
+ */
+function callIntaSendApi(path, method, body, callback) {
+    // Retrieve API keys from PlayFab Title Data for security
+    const publishableKey = server.GetTitleData({ Keys: ["PUBLISHABLE_KEY"] }).Data.PUBLISHABLE_KEY;
+    const secretKey = server.GetTitleData({ Keys: ["SECRET_KEY"] }).Data.SECRET_KEY;
 
-  return new IntaSend(publishableKey, secretKey, isTestEnv);
+    // Configure the HTTPS request options
+    const options = {
+        hostname: "payment.intasend.com",
+        path: `/api/v1${path}`,
+        method: method,
+        headers: {
+            "Authorization": `Bearer ${secretKey}`,
+            "Content-Type": "application/json"
+        }
+    };
+
+    // Initiate the HTTP request
+    const req = https.request(options, (res) => {
+        let data = "";
+
+        // Collect data chunks
+        res.on("data", (chunk) => { data += chunk; });
+
+        // Process the response data
+        res.on("end", () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+                callback(null, JSON.parse(data)); // Parse JSON on successful response
+            } else {
+                callback(new Error(`Error: ${res.statusCode} - ${data}`));
+            }
+        });
+    });
+
+    // Handle any request errors
+    req.on("error", (e) => { callback(e); });
+
+    // Send request body if it's a POST request
+    if (body && method === "POST") req.write(JSON.stringify(body));
+    req.end();
 }
 
-// Wallet Creation
-exports.createWallet = async (label, walletType = 'WORKING', currency = 'KES', canDisburse = true) => {
-  const intasend = initIntaSend();
-  try {
-    const wallet = await intasend.wallets().create({ label, wallet_type: walletType, currency, can_disburse: canDisburse });
-    return { success: true, data: wallet };
-  } catch (error) {
-    console.error("Wallet Creation Error:", error);
-    return { success: false, error };
-  }
-};
+/**
+ * Create a Wallet function
+ * args: { label: string, wallet_type: string, currency: string, can_disburse: boolean }
+ */
+handlers.createWallet = function (args, context) {
+    const body = {
+        label: args.label || "Game-Wallet",
+        wallet_type: args.wallet_type || "WORKING",
+        currency: args.currency || "KES",
+        can_disburse: args.can_disburse !== undefined ? args.can_disburse : true
+    };
 
-// Retrieve Recent Transactions
-exports.getRecentTransactions = async (walletId) => {
-  const intasend = initIntaSend();
-  try {
-    const transactions = await intasend.wallets().transactions(walletId);
-    return { success: true, data: transactions };
-  } catch (error) {
-    console.error("Transaction Retrieval Error:", error);
-    return { success: false, error };
-  }
-};
-
-// Deposit (Fund Wallet via Checkout)
-exports.fundCheckout = async (userInfo, amount, currency, walletId, apiRef, redirectUrl) => {
-  const intasend = initIntaSend();
-  try {
-    const response = await intasend.wallets().fundCheckout({
-      ...userInfo,
-      host: 'https://yourwebsite.com',
-      amount,
-      currency,
-      api_ref: apiRef,
-      redirect_url: redirectUrl,
-      wallet_id: walletId,
+    callIntaSendApi("/wallets/", "POST", body, (error, response) => {
+        if (error) {
+            log.error("Wallet creation failed:", error.message);
+            return { success: false, error: error.message };
+        }
+        return { success: true, data: response };
     });
-    return { success: true, data: response };
-  } catch (error) {
-    console.error("Deposit Error:", error);
-    return { success: false, error };
-  }
 };
 
-// Internal Transfer (User to User)
-exports.internalTransfer = async (sourceWalletId, destinationWalletId, amount, narrative) => {
-  const intasend = initIntaSend();
-  try {
-    const response = await intasend.wallets().intraTransfer(sourceWalletId, destinationWalletId, amount, narrative);
-    return { success: true, data: response };
-  } catch (error) {
-    console.error("Internal Transfer Error:", error);
-    return { success: false, error };
-  }
+/**
+ * Get Recent Transactions function
+ * args: { wallet_id: string }
+ */
+handlers.getRecentTransactions = function (args, context) {
+    const walletId = args.wallet_id;
+
+    callIntaSendApi(`/wallets/${walletId}/transactions/`, "GET", null, (error, response) => {
+        if (error) {
+            log.error("Transaction retrieval failed:", error.message);
+            return { success: false, error: error.message };
+        }
+        return { success: true, data: response };
+    });
 };
 
-// Withdraw (External Transfer)
-exports.externalTransfer = async (walletId, amount, narrative) => {
-  const intasend = initIntaSend();
-  try {
-    const response = await intasend.wallets().intraTransfer(walletId, null, amount, narrative);
-    return { success: true, data: response };
-  } catch (error) {
-    console.error("External Transfer Error:", error);
-    return { success: false, error };
-  }
+/**
+ * Fund Checkout (Deposit) function
+ * args: { first_name: string, last_name: string, email: string, amount: number, currency: string, api_ref: string, redirect_url: string, wallet_id: string }
+ */
+handlers.fundCheckout = function (args, context) {
+    const body = {
+        first_name: args.first_name,
+        last_name: args.last_name,
+        email: args.email,
+        host: "https://yourwebsite.com", // Replace with your actual host
+        amount: args.amount,
+        currency: args.currency || "KES",
+        api_ref: args.api_ref || "test",
+        redirect_url: args.redirect_url,
+        wallet_id: args.wallet_id
+    };
+
+    callIntaSendApi("/wallets/fund-checkout/", "POST", body, (error, response) => {
+        if (error) {
+            log.error("Fund checkout failed:", error.message);
+            return { success: false, error: error.message };
+        }
+        return { success: true, data: response };
+    });
 };
 
+/**
+ * Internal Transfer (User-to-User) function
+ * args: { source_wallet_id: string, destination_wallet_id: string, amount: number, narrative: string }
+ */
+handlers.intraTransfer = function (args, context) {
+    const body = {
+        source_wallet_id: args.source_wallet_id,
+        destination_wallet_id: args.destination_wallet_id,
+        amount: args.amount,
+        narrative: args.narrative || "Payment"
+    };
 
-// Transaction Status
-exports.getTransactionStatus = async (trackingId) => {
-  const intasend = initIntaSend();
-  try {
-    const status = await intasend.payouts().status({ tracking_id: trackingId });
-    return { success: true, data: status };
-  } catch (error) {
-    console.error("Transaction Status Error:", error);
-    return { success: false, error };
-  }
+    callIntaSendApi("/wallets/intra-transfer/", "POST", body, (error, response) => {
+        if (error) {
+            log.error("Intra-transfer failed:", error.message);
+            return { success: false, error: error.message };
+        }
+        return { success: true, data: response };
+    });
+};
+
+/**
+ * Get Transaction Status function
+ * args: { tracking_id: string }
+ */
+handlers.getTransactionStatus = function (args, context) {
+    const body = { tracking_id: args.tracking_id };
+
+    callIntaSendApi("/payouts/status/", "POST", body, (error, response) => {
+        if (error) {
+            log.error("Transaction status retrieval failed:", error.message);
+            return { success: false, error: error.message };
+        }
+        return { success: true, data: response };
+    });
 };
