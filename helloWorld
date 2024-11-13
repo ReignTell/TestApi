@@ -1,6 +1,13 @@
 handlers.helloWorld = function(args, context) {
-    log.info("HelloWorld function called");  // Log for debugging
+    log.info("Starting HelloWorld function");
 
-    // Ensure the return value is correctly formatted and contains expected fields
-    return { message: "Hello World from Cloud Script!" };
+    try {
+        // Your core logic
+        var message = "Hello World from Cloud Script!";
+        log.info("Returning message: " + message);
+        return { message: message };
+    } catch (e) {
+        log.error("Error in helloWorld function: " + e);
+        return { error: "Something went wrong!" };
+    }
 };
